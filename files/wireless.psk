@@ -1,0 +1,6 @@
+[Security]
+PreSharedKey=<YOUR_KEY>
+Passphrase=<YOUR_PASSPHRASE>
+
+[Settings]
+AutoConnect=true

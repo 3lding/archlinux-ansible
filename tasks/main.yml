@@ -269,10 +269,11 @@
     - "/var/lib/iwd"
     - "/etc/iwd"
 
+# TODO: Replace that against a variable
 - name: chroot - Transferring iwd wireless configuration
   copy:
-    src: "3v11_C0r7{G5}.psk"
-    dest: /mnt/rootfs/var/lib/iwd/3v11_C0r7\{G5\}.psk
+    src: "wireless.psk"
+    dest: /mnt/rootfs/var/lib/iwd/wireless.psk
     mode: 0640
     remote_src: no
 
