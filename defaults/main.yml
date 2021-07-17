@@ -1,0 +1,137 @@
+---
+# defaults file for archlinux-install
+disk_primary: "/dev/nvme0n1"
+btrfs_conf:
+  subvolumes:
+    - name: "@"
+      mount_path: ""
+    - name: "@containers"
+      mount_path: "/var/lib/containers"
+    - name: "@home"
+      mount_path: "/home"
+    - name: "@pkg"
+      mount_path: "/var/cache/pacman/pkg"
+    - name: "@snapshots"
+      mount_path: "/.snapshots"
+    - name: "@btrfs"
+      mount_path: "/btrfs"
+  mount_opts: "noatime,nodiratime,compress=zstd,space_cache,ssd"
+
+host_conf:
+  kernel_hooks: "encrypt btrfs"
+  hostname: "archlinux"
+  locale: |
+    LANG="en_US.UTF-8"
+    LC_CTYPE="en_US.UTF-8"
+    LC_MESSAGES="en_US.UTF-8"
+    LC_COLLATE="C"
+  services:
+    - "sshd"
+    - "avahi-daemon"
+    - "cups"
+    - "cronie"
+    - "gdm"
+    - "ntpd"
+    - "thermald"
+    - "systemd-resolved"
+    - "systemd-networkd"
+    - "iwd"
+
+user_groups: []
+
+users:
+  - name: ""
+    home_dir: ""
+    password: ""
+    shell: ""
+    comment: ""
+    groups: []
+    system: False
+    btrfs_subvol: False
+
+pkg_list:
+  base:
+    - base
+    - base-devel
+    - linux-lts
+    - linux-firmware
+    - amd-ucode
+    - apparmor
+    - btrfs-progs
+    - cryptsetup
+    - iwd
+    - python
+  extra:
+    - sudo
+    - cups
+    - avahi
+    - hplip
+    - cronie
+    - fprintd
+    - alacritty
+    - exa
+    - openssh
+    - inetutils
+    - curl
+    - dhclient
+    - tar
+    - gzip
+    - zip
+    - p7zip
+    - unzip
+    - ntp
+    - pipewire
+    - pipewire-jack
+    - pipewire-alsa
+    - pipewire-pulse
+    - pipewire-media-session
+    - bind
+    - podman
+    - buildah
+    - ansible-base
+    - ansible-lint
+    - git
+    - flatpak
+    - vim
+    - vim-airline
+    - vim-airline-themes
+    - vim-ansible
+    - zsh
+    - zsh-completions
+    - zsh-syntax-highlighting
+    - man
+    - hashcat
+    - hydra
+    - firefox
+    - chromium
+    - thunderbird
+    - libreoffice-fresh
+    - mesa
+    - ntfs-3g
+    - opencl-mesa
+    - typescript
+    - go
+    - gnome
+    - gnome-desktop
+    - gnome-backgrounds
+    - gnome-shell-extensions
+    - gnome-shell-extension-appindicator
+    - gnome-screenshot
+    - gnome-tweaks
+    - gdm
+    - gimp
+    - peek
+    - shotwell
+    - tcpdump
+    - restic
+    - noto-fonts
+    - noto-fonts-emoji
+    - thermald
+    - ttf-cascadia-code
+    - ttf-fira-code
+    - ttf-font-awesome
+    - ttf-nerd-fonts-symbols-mono
+    - yad
+    - yarn
+    - xf86-video-amdgpu
+    - vulkan-radeon

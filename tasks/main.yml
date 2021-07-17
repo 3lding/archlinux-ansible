@@ -1,0 +1,313 @@
+# vim: ts=2 sts=2 sw=2 expandtab
+---
+# tasks file for archlinux-install
+- name: Read device info
+  parted:
+    device: "{{ disk_primary }}"
+    unit: "MiB"
+  register: disk_info
+
+- name: Remove all present partitions
+  parted:
+    device: "{{ disk_primary }}"
+    number: "{{ item.num }}"
+    state: absent
+  loop: "{{ disk_info.partitions }}"
+  when: disk_info.partitions is defined and disk_info.partitions|length > 0
+
+- name: Create a new primary partition for UEFI
+  parted:
+    device: "{{ disk_primary }}"
+    number: 1
+    label: gpt
+    flags: [esp]
+    state: present
+    part_type: primary
+    part_end: 512MiB
+
+- name: Create a new primary partition for LUKS
+  parted:
+    device: "{{ disk_primary }}"
+    number: 2
+    unit: MiB
+    label: gpt
+    state: present
+    part_type: primary
+    part_start: 512MiB
+    part_end: 100%
+
+- name: Creating key file for LUKS
+  copy:
+    content: "{{ vault_luks_pass }}"
+    dest: /tmp/luks_key
+
+- name: Create LUKS Container
+  shell: |
+    /usr/bin/env cryptsetup --type luks2 --cipher aes-xts-plain64 --hash sha512 --iter-time 8192 --key-size 512 --pbkdf argon2id --sector-size 1024 --use-random luksFormat {{ disk_primary + 'p2' if 'nvme' in disk_primary else '2' }} < /tmp/luks_key
+  register: shell_result
+
+- name: Checking state of LUKS Container
+  assert:
+    that:
+      - shell_result.rc == 0
+    fail_msg: "Error creating LUKS Container"
+
+- name: Open LUKS Container
+  luks_device:
+    device: "{{ disk_primary + 'p2' if 'nvme' in disk_primary else '2' }}"
+    state: opened
+    name: luks
+    keyfile: /tmp/luks_key
+
+- name: Format UEFI partition
+  filesystem:
+    dev: "{{ disk_primary + 'p1' if 'nvme' in disk_primary else '1' }}"
+    fstype: vfat
+    opts: "-F32"
+
+- name: Format luks device to btrfs
+  filesystem:
+    dev: /dev/mapper/luks
+    fstype: btrfs
+
+- name: Mount LUKS device to /mnt/rootfs
+  mount:
+    path: /mnt/rootfs
+    src: /dev/mapper/luks
+    fstype: btrfs
+    state: mounted
+
+- name: Creating btrfs subvolumes
+  shell: |
+    btrfs sub create "{{ '/mnt/rootfs/' + item.name }}"
+  loop: "{{ btrfs_conf.subvolumes }}"
+  register: shell_results
+
+- name: Checking state of btrfs subvolumes
+  assert:
+    that:
+      - item.rc == 0
+    fail_msg: "Error failed creating btrfs subvolume {{ item.item }}"
+  loop: "{{ shell_results.results }}"
+
+- name: Unmounting btrfs partition
+  mount:
+    path: /mnt/rootfs
+    state: unmounted
+
+- name: Mounting btrfs subvolumes
+  mount:
+    path: "/mnt/rootfs{{ item.mount_path }}"
+    src: /dev/mapper/luks
+    fstype: btrfs
+    state: mounted
+    opts: "{{ btrfs_conf.mount_opts + ',subvol=' + item.name if not '@btrfs' in item.name else 'subvolid=5' }}"
+  loop: "{{ btrfs_conf.subvolumes }}"
+
+- name: Mount UEFI partition to /mnt/rootfs/boot
+  mount:
+    path: /mnt/rootfs/boot
+    src: "{{ disk_primary + 'p1' if 'nvme' in disk_primary else '1' }}"
+    fstype: vfat
+    state: mounted
+
+- name: Refreshing GPG Keys with pacman-key
+  shell: |
+    set timeout 300
+    pacman-key --init
+    pacman-key --refresh-keys --keyserver="hkps://keyserver.ubuntu.com"
+    pacman-key --populate archlinux
+  register: pacman_key_result
+
+- name: Bootstrapping packages with pacstrap (this may take some time)
+  shell: |
+    pacstrap /mnt/rootfs {{ pkg_list.base|join(' ') }}
+  register: pacstrap_result
+
+- name: Generating fstab
+  shell: |
+    genfstab -t UUID /mnt/rootfs > /mnt/rootfs/etc/fstab
+  register: genfstab_result
+
+- name: chroot - Setting hostname
+  copy:
+    content: "{{ host_conf.hostname }}"
+    dest: /mnt/rootfs/etc/hostname
+
+- name: chroot - Setting /etc/locale.conf
+  copy:
+    content: "{{ host_conf.locale }}"
+    dest: /mnt/rootfs/etc/locale.conf
+
+- name: chroot - Preparing /etc/locale.gen
+  lineinfile:
+    path: /mnt/rootfs/etc/locale.gen
+    regexp: '^\#(en_US\.UTF-8 UTF-8)(\s*)?$'
+    backrefs: yes
+    line: '\1'
+
+- name: chroot - Generatig locale with locale-gen
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    locale-gen
+    EOF
+
+- name: chroot - Setting /etc/localtime
+  file:
+    src: /usr/share/zoneinfo/Europe/Berlin
+    dest: /mnt/rootfs/etc/localtime
+    state: link
+
+- name: chroot - Setting /etc/mkinitcpio.conf
+  lineinfile:
+    path: /mnt/rootfs/etc/mkinitcpio.conf
+    backup: yes
+    regexp: '^(HOOKS\=\(.*block\s)(.*\))$'
+    line: '\1{{ host_conf.kernel_hooks }} \2'
+    backrefs: yes
+    state: present
+
+- name: chroot - Generating kernel with mkinitcpio
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    mkinitcpio -p linux-lts
+    EOF
+  register: mkinitcpio_result
+
+- name: chroot - Installing additional packages (this may take some time)
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    pacman -Sy {{ pkg_list.extra|join(' ') }} --noconfirm
+    EOF
+  register: pacman_result
+
+- name: chroot - Enabling required services
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    systemctl enable {{ item }}
+    EOF
+  loop: "{{ host_conf.services }}"
+
+- name: chroot - Creating symlink for systemd-resolved
+  file:
+    src: /run/systemd/resolve/stub-resolv.conf
+    dest: /mnt/rootfs/etc/resolv.conf
+    owner: root
+    group: root
+    force: yes
+    state: link
+
+- name: Reading UUID of LUKS partition
+  shell: |
+    blkid -s UUID -o value {{ disk_primary + 'p2' if 'nvme' in disk_primary else '2' }}
+  register: part_uuid
+
+- name: chroot - Installing bootloader
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    bootctl install
+    EOF
+  register: bootctl_result
+
+- name: Assert - Bootloader installed
+  assert:
+    that:
+      - bootctl_result.rc == 0
+    fail_msg: "Failed installing bootloader"
+
+- name: chroot - Writing bootloader entry /boot/loader/entries/archlinux.conf
+  blockinfile:
+    path: /mnt/rootfs/boot/loader/entries/archlinux.conf
+    block: |
+      title Arch Linux
+      linux /vmlinuz-linux
+      initrd /amd-ucode.img
+      initrd /initramfs-linux.img
+      options cryptdevice=UUID={{ part_uuid.stdout }}:luks:allow-discards root=/dev/mapper/luks rootflags=subvol=@ rd.luks.options=discard lsm=lockdown,yama,apparmor,bpf rw
+    state: present
+    create: yes
+
+- name: chroot - Writing bootloader /boot/loader.conf
+  blockinfile:
+    path: /mnt/rootfs/boot/loader.conf
+    block: |
+      default archlinux.conf
+      timeout 2
+      console-mode max
+      editor no
+    state: present
+    create: yes
+
+- name: chroot - Creating groups
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    groupadd {{ item }}
+    EOF
+  loop: "{{ user_groups }}"
+
+- name: chroot - Creating users
+  shell: |
+    arch-chroot /mnt/rootfs <<EOF
+    useradd --create-home --comment {{ item.comment }} --home-dir {{ item.home_dir }} {{ '--groups ' + item.groups|join(',') if item.groups is defined else '' }} {{ '--btrfs-subvolume-home' if item.btrfs_subvol else '' }} {{ '--system' if item.system else '' }} {{ '--shell ' + item.shell }} --password {{ item.password|regex_replace('(\$)', '\\$')|quote if item.password|length > 0 else '' }} {{ item.name }}
+    EOF
+  loop: "{{ users }}"
+
+- name: chroot - Placing sudoers file /etc/sudoers.d/staff
+  blockinfile:
+    path: /mnt/rootfs/etc/sudoers.d/staff
+    block: |
+      %staff    ALL=(ALL)    ALL
+    state: present
+    create: yes
+
+- name: chroot - Ensuring iwd directories
+  file:
+    path: "{{ '/mnt/rootfs' + item }}"
+    mode: 0700
+    state: directory
+  loop:
+    - "/var/lib/iwd"
+    - "/etc/iwd"
+
+- name: chroot - Transferring iwd wireless configuration
+  copy:
+    src: "3v11_C0r7{G5}.psk"
+    dest: /mnt/rootfs/var/lib/iwd/3v11_C0r7\{G5\}.psk
+    mode: 0640
+    remote_src: no
+
+- name: chroot - Transferring iwd main.conf
+  copy:
+    src: "iwd_main.conf"
+    dest: "/mnt/rootfs/etc/iwd/main.conf"
+    mode: 0600
+    remote_src: no
+
+- name: chroot - Transferring systemd-networkd configs
+  copy:
+    src: "{{ item }}"
+    dest: "/mnt/rootfs/etc/systemd/network/10-{{ item }}"
+  loop:
+    - "wired.conf"
+    - "wireless.conf"
+
+- name: Unmounting boot
+  mount:
+    path: "/mnt/rootfs/boot"
+    state: unmounted
+
+- name: Unmounting subvolumes
+  mount:
+    path: "{{ '/mnt/rootfs' + item.mount_path }}"
+    state: unmounted
+  loop: "{{ btrfs_conf.subvolumes | reverse | list }}"
+
+- name: Closing LUKS Container
+  luks_device:
+    name: luks
+    state: closed
+
+- name: Removing key file
+  file:
+    path: /tmp/luks_key
+    state: absent

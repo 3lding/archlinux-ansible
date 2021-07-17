@@ -1,0 +1,18 @@
+---
+# vars file for archlinux-install
+user_groups:
+  - audit
+  - staff
+
+users:
+  - name: 'arch'
+    password: "{{ vault_users.arch.password|password_hash('sha512') }}"
+    home_dir: '/home/arch'
+    shell: /bin/zsh
+    btrfs_subvol: True
+    groups:
+      - audit
+      - staff
+    system: False
+    comment: 'Sample User'
+
