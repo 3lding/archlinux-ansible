@@ -1,4 +1,4 @@
-Role Name
+ArchLinux Workstation
 =========
 
 This Ansible Role is used for setting up a working ArchLinux Workstation with encrypted BTRFS and subvolumes.
